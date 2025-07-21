@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -38,6 +38,19 @@ jobs:
           libltdl-dev libtool-bin \
           zlib1g-dev libncurses5-dev libssl-dev libffi-dev \
           git unzip openjdk-17-jdk
+
+    - name: Manually install libtinfo5
+      run: |
+        wget https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+        sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
+
+
+    - name: Symlink libtinfo5 to libtinfo6 (for backward compatibility)
+      run: |
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
+        ls -l /usr/lib/x86_64-linux-gnu/libtinfo.so.*
+
+        
 
     - name: Set up Android SDK
       run: |
@@ -100,28 +113,58 @@ jobs:
           autoreconf --install --force --verbose
         fi
 
-    - name: Build APK
+    - name: Decode Keystore
       run: |
-        buildozer -v android debug
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Secret is empty"
+            exit 1
+          else
+            echo "Secret is set"
+          fi
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > keystore/my-release-key.jks
+
     
 
-    - name: List bin directory contents
-      run: ls -l bin/
-    
-    - name: Move generated APK to known location (if exists)
+    - name: Build Release APK
+      uses: digreatbrian/buildozer-action@v2
+      with:
+        python-version: 3.11
+        buildozer-cmd: buildozer -v android release
+
+    - name: 🔍 Debug - Check APK files
       run: |
-        if ls bin/*release-unsigned.apk 1> /dev/null 2>&1; then
-          mv bin/*release-unsigned.apk app-unsigned.apk
+        if [ -d bin ]; then
+          ls -l bin/
+        else
+          echo "❌ APK build failed. 'bin/' folder does not exist."
+          echo "Please check the Buildozer logs above for exact errors."
+          exit 1
         fi
+
+
     
-    - name: Upload APK Artifact
+    - name: Sign the APK manually
+      run: |
+        APK_PATH=$(find ./bin -name "*-release-unsigned.apk" | head -n 1)
+        jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+          -keystore keystore/my-release-key.jks \
+          -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+          -keypass "${{ secrets.KEY_PASSWORD }}" \
+          "$APK_PATH" "${{ secrets.KEY_ALIAS }}"
+
+    - name: Rename the signed APK
+      run: |
+        APK_PATH=$(find ./bin -name "*-release-unsigned.apk" | head -n 1)
+        NEW_APK_PATH="${APK_PATH/-unsigned/-signed}"
+        echo "Renaming to $NEW_APK_PATH"
+        mv "$APK_PATH" "$NEW_APK_PATH"
+
+
+    - name: Upload Signed APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: APK
-        path: |
-          app-unsigned.apk
-          bin/*.apk
-        if-no-files-found: warn
-        
+        name: signed-release-apk
+        path: ./bin/*-release-signed.apk
+        if-no-files-found: error
 
         
