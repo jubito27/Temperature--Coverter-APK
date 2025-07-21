@@ -5,7 +5,7 @@ package.domain = org.jubito.uvd
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
-orientation = portrait
+
 #icon = appicon.png
 # (Python deps)
 requirements = python3,kivymd,android,libffi
